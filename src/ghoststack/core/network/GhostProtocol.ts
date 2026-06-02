@@ -2,6 +2,18 @@ import { protocol, session } from 'electron'
 import * as http from 'http'
 import { Readable } from 'stream'
 import { GhostEngine } from './GhostEngine'
+import type { SwarmManager } from '../../swarm/SwarmManager'
+
+// ── GhostSwarm P2P fallback ──
+let swarmManagerRef: SwarmManager | null = null
+
+/**
+ * Set the SwarmManager reference so GhostProtocol can fall back to P2P.
+ * Called by the orchestrator after initialization.
+ */
+export function setSwarmManager(sm: SwarmManager): void {
+  swarmManagerRef = sm
+}
 
 /**
  * GhostProtocol v5 — Local Media Relay
@@ -204,20 +216,39 @@ function startLocalRelay(): Promise<number> {
           fetchOptions.body = Buffer.concat(chunks) as unknown as BodyInit
         }
 
-        // Fetch via GhostEngine native bypass
-        const response = await GhostEngine.fetch(targetUrl, fetchOptions)
+        // Fetch via GhostEngine native bypass, with GhostSwarm P2P fallback
+        let response: Response | null = null
 
-        if (!response.ok) {
-          console.error(
-            `[GhostProtocol] ❌ Relay target returned ${response.status} for: ${targetUrl}`
-          )
-        } else {
-          console.log(`[GhostProtocol] ✅ Relay ${response.status}: ${targetUrl.substring(0, 80)}`)
+        try {
+          response = await GhostEngine.fetch(targetUrl, fetchOptions)
+          if (response.ok) {
+            console.log(`[GhostProtocol] ✅ Relay ${response.status}: ${targetUrl.substring(0, 80)}`)
+          }
+        } catch (engineErr) {
+          console.warn(`[GhostProtocol] GhostEngine failed for ${targetUrl}:`, engineErr)
         }
 
-        if (!response.ok) {
-          res.writeHead(response.status)
-          res.end(`Relay failed: ${response.status}`)
+        // Fallback: Try GhostSwarm P2P tunnel
+        if ((!response || !response.ok) && swarmManagerRef && swarmManagerRef.getStatus().status === 'connected') {
+          try {
+            console.log(`[GhostProtocol] 🔀 Falling back to GhostSwarm P2P for: ${targetUrl.substring(0, 80)}`)
+            const swarmRes = await swarmManagerRef.fetch(targetUrl, fetchOptions)
+            // Convert SwarmResponse to a standard Response object
+            response = new Response(new Uint8Array(swarmRes.data), {
+              status: swarmRes.status,
+              headers: swarmRes.headers
+            })
+            console.log(`[GhostProtocol] ✅ Swarm relay ${swarmRes.status}: ${targetUrl.substring(0, 80)}`)
+          } catch (swarmErr) {
+            console.error(`[GhostProtocol] ❌ GhostSwarm P2P also failed for ${targetUrl}:`, swarmErr)
+          }
+        }
+
+        if (!response || !response.ok) {
+          const status = response?.status || 502
+          console.error(`[GhostProtocol] ❌ All engines failed for: ${targetUrl}`)
+          res.writeHead(status)
+          res.end(`Relay failed: ${status}`)
           return
         }
 
@@ -366,10 +397,31 @@ export async function initializeGhostProtocol(): Promise<void> {
         fetchOptions.body = Buffer.concat(chunks)
       }
 
-      // Fetch HTML via GhostEngine Native Bypass
-      const resp = await GhostEngine.fetch(realUrl, fetchOptions)
-      if (!resp.ok) {
-        throw new Error(`Native Bypass failed (${resp.status})`)
+      // Fetch HTML via GhostEngine Native Bypass, with GhostSwarm P2P fallback
+      let resp: Response | null = null
+
+      try {
+        resp = await GhostEngine.fetch(realUrl, fetchOptions)
+      } catch (engineErr) {
+        console.warn(`[GhostProtocol] GhostEngine failed for ${realUrl}:`, engineErr)
+      }
+
+      // Fallback: Try GhostSwarm P2P tunnel
+      if ((!resp || !resp.ok) && swarmManagerRef && swarmManagerRef.getStatus().status === 'connected') {
+        try {
+          console.log(`[GhostProtocol] 🔀 Ghost:// falling back to GhostSwarm P2P for: ${hostname}`)
+          const swarmRes = await swarmManagerRef.fetch(realUrl, fetchOptions)
+          resp = new Response(new Uint8Array(swarmRes.data), {
+            status: swarmRes.status,
+            headers: swarmRes.headers
+          })
+        } catch (swarmErr) {
+          console.error(`[GhostProtocol] ❌ GhostSwarm P2P also failed for ${hostname}:`, swarmErr)
+        }
+      }
+
+      if (!resp || !resp.ok) {
+        throw new Error(`All bypass engines failed (${resp?.status || 'no response'})`)
       }
 
       const mime = getMime(realUrl) || resp.headers.get('content-type') || 'text/html'

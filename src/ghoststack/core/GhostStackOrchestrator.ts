@@ -18,8 +18,9 @@ import { FingerprintShield } from '../privacy/FingerprintShield'
 import { CookieIsolator } from '../privacy/CookieIsolator'
 import { StoragePartitioner } from '../privacy/StoragePartitioner'
 import { DNSResolver } from '../dns/DNSResolver'
-import { getRelayPort } from './network/GhostProtocol'
+import { getRelayPort, setSwarmManager } from './network/GhostProtocol'
 import { GhostStackProxy } from './GhostStackProxy'
+import type { SwarmManager } from '../swarm/SwarmManager'
 
 /** GhostStack operational status */
 export interface GhostStackStatus {
@@ -88,6 +89,7 @@ export class GhostStackOrchestrator {
   private mitmBypassDomains: Set<string> = new Set()
   private proxyPort = 0
   private initialized = false
+  private swarmManager: SwarmManager | null = null
 
   constructor() {
     this.cache = new SessionCache()
@@ -139,6 +141,12 @@ export class GhostStackOrchestrator {
       // Probe network environment
       this.networkEnv = await probeNetwork()
       this.broadcastStatus()
+
+      // Start Swarm Manager if available
+      if (this.swarmManager) {
+        setSwarmManager(this.swarmManager)
+        this.swarmManager.start(this.networkEnv.networkType)
+      }
     } catch (err) {
       // GhostStack should never crash the app
       this.networkEnv = {
@@ -160,6 +168,10 @@ export class GhostStackOrchestrator {
    */
   setUIWebContents(wc: WebContents): void {
     this.uiWebContents = wc
+  }
+
+  setSwarmManager(sm: SwarmManager): void {
+    this.swarmManager = sm
   }
 
   /**
@@ -284,14 +296,21 @@ export class GhostStackOrchestrator {
         }
       }
 
+      // Try GhostSwarm (P2P Fallback) if others failed
+      if (!result && this.swarmManager && this.swarmManager.getStatus().status === 'connected') {
+        result = { ip: 'tunnel', engine: 'swarm', method: 'webrtc-data-channel' }
+      }
+
       if (result) {
         // Cache the successful bypass
-        this.cache.setBypass(
-          domain,
-          result.engine as 'ipraw' | 'splitcast' | 'temporal',
-          result.method,
-          result.ip
-        )
+        if (result.engine !== 'swarm') {
+          this.cache.setBypass(
+            domain,
+            result.engine as 'ipraw' | 'splitcast' | 'temporal',
+            result.method,
+            result.ip
+          )
+        }
         this.cache.recordBypassTime(Date.now() - startTime)
         this.activeBypasses.set(domain, result.engine)
         this.broadcastStatus()

@@ -1,3 +1,4 @@
+
 /**
  * GhostStack Block Detector
  * Automatically identifies the type of network block affecting a request.

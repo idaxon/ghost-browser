@@ -84,6 +84,12 @@ export class TabManager {
       console.log(`[Renderer ${id}] ${message}`);
     })
 
+    // Intercept popups and open them as new tabs
+    view.webContents.setWindowOpenHandler(({ url }) => {
+      this.createTab(url)
+      return { action: 'deny' }
+    })
+
     // Track the URL BEFORE redirect happens (will-navigate fires before will-redirect)
     view.webContents.on('will-navigate', (event, url) => {
       if (!url.startsWith('data:') && !url.includes('about:blank')) {
@@ -217,7 +223,8 @@ export class TabManager {
 
     view.webContents.on(
       'did-fail-load',
-      async (_event, errorCode, errorDescription, validatedURL) => {
+      async (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        if (!isMainFrame) return
         this.sendToUI('tab:updated', id, { isLoading: false })
         if (errorCode === -3) return // ERR_ABORTED is normal for some redirects/navigations
 
@@ -232,8 +239,8 @@ export class TabManager {
             validatedURL
           )
 
-          if (result) {
-            // Bypass successful! Reload the page
+          if (result && !validatedURL.startsWith('ghost://')) {
+            // Bypass successful! Reload the original (non-ghost) URL
             view.webContents.loadURL(validatedURL)
           } else if (!validatedURL.startsWith('ghost://') && !validatedURL.includes('127.0.0.1')) {
             // Native bypass failed (or wasn't attempted). Fallback to deep GhostProtocol Node.js relay!
@@ -504,7 +511,7 @@ export class TabManager {
 
   private normalizeUrl(url: string): string {
     if (url === 'flux://newtab' || url === 'about:blank') return url
-    if (/^https?:\/\//i.test(url)) return url
+    if (/^(https?|ghost|data|blob):/i.test(url)) return url
     if (/^[^\s]+\.[^\s]+$/.test(url) && !url.includes(' ')) return `https://${url}`
     return `https://www.google.com/search?q=${encodeURIComponent(url)}`
   }

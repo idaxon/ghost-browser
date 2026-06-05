@@ -48,8 +48,14 @@ function timestamp(): string {
 
 function ensureLogDir(): string {
   if (logDir) return logDir
-  const userData = app.getPath('userData')
-  logDir = path.join(userData, LOG_DIR_NAME)
+  
+  // Save to the local project folder in development
+  if (app.isPackaged) {
+    logDir = path.join(app.getPath('userData'), LOG_DIR_NAME)
+  } else {
+    logDir = path.join(process.cwd(), LOG_DIR_NAME)
+  }
+  
   if (!fs.existsSync(logDir)) {
     fs.mkdirSync(logDir, { recursive: true })
   }

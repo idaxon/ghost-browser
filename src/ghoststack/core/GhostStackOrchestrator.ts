@@ -680,10 +680,26 @@ export class GhostStackOrchestrator {
         headersModified = true
       }
 
-      // b. Permissive CSP
+      // b. Rigorously strip all CSP and Trusted Types headers
       if (!details.responseHeaders) details.responseHeaders = {}
-      details.responseHeaders['Content-Security-Policy'] = ['']
-      headersModified = true
+      
+      const headersToStrip = [
+        'content-security-policy',
+        'content-security-policy-report-only',
+        'require-trusted-types-for',
+        'x-frame-options',
+        'x-content-type-options',
+        'x-xss-protection',
+        'report-to',
+        'nel'
+      ]
+
+      for (const key of Object.keys(details.responseHeaders)) {
+        if (headersToStrip.includes(key.toLowerCase())) {
+          delete details.responseHeaders[key]
+          headersModified = true
+        }
+      }
 
       if (headersModified) {
         callback({ responseHeaders: details.responseHeaders })

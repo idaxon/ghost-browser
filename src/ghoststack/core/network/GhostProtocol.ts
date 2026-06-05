@@ -244,16 +244,15 @@ function startLocalRelay(): Promise<number> {
           }
         }
 
-        if (!response || !response.ok) {
-          const status = response?.status || 502
+        if (!response) {
           console.error(`[GhostProtocol] ❌ All engines failed for: ${targetUrl}`)
-          res.writeHead(status)
-          res.end(`Relay failed: ${status}`)
+          res.writeHead(502)
+          res.end(`Relay failed: 502`)
           return
         }
 
         const mime =
-          getMime(targetUrl) || response.headers.get('content-type') || 'application/octet-stream'
+          getMime(targetUrl) || response.headers.get('content-type') || 'text/plain'
 
         const resHeaders: Record<string, string> = {
           'Content-Type': mime,
@@ -275,21 +274,35 @@ function startLocalRelay(): Promise<number> {
           let text = Buffer.from(arrayBuf).toString('utf-8')
 
           if (mime.includes('mpegurl') || mime.includes('m3u8') || targetUrl.includes('.m3u8')) {
-            // Fix relative URLs in m3u8 playlists (e.g. chunk_1.ts)
             const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1)
+            const relay = (u: string) => `http://127.0.0.1:${localRelayPort}/r?u=${encodeURIComponent(u)}`
             text = text
-              .split('\\n')
+              .split('\n')
               .map((line) => {
                 const tLine = line.trim()
-                if (tLine && !tLine.startsWith('#') && !tLine.startsWith('http')) {
-                  const absoluteUrl = tLine.startsWith('/')
-                    ? new URL(tLine, targetUrl).href
-                    : baseUrl + tLine
-                  return `http://127.0.0.1:${localRelayPort}/r?u=${encodeURIComponent(absoluteUrl)}`
+                // Rewrite EXT-X-KEY URI (encryption keys must go through relay)
+                if (tLine.startsWith('#EXT-X-KEY') && tLine.includes('URI="')) {
+                  return line.replace(/URI="(https?:\/\/[^"]+)"/g, (_, u) => `URI="${relay(u)}"`)
+                }
+                // Rewrite segment/playlist lines — both absolute and relative
+                if (tLine && !tLine.startsWith('#')) {
+                  const absoluteUrl = tLine.startsWith('http')
+                    ? tLine
+                    : tLine.startsWith('/')
+                      ? new URL(tLine, targetUrl).href
+                      : baseUrl + tLine
+                  return relay(absoluteUrl)
                 }
                 return line
               })
-              .join('\\n')
+              .join('\n')
+          }
+          if (targetUrl.includes('imasdk.googleapis.com')) {
+            // Patch Google IMA SDK protocol check so it doesn't crash the video player
+            text = text.replace(/document\.location\.protocol/g, '"https:"')
+            text = text.replace(/window\.location\.protocol/g, '"https:"')
+            text = text.replace(/throw Error\("IMA SDK is either not loaded from a google domain/g, 'console.warn("Patched IMA SDK')
+            text = text.replace(/throw new Error\("IMA SDK is either not loaded from a google domain/g, 'console.warn("Patched IMA SDK')
           }
 
           const finalBuf = Buffer.from(text, 'utf-8')
@@ -420,18 +433,23 @@ export async function initializeGhostProtocol(): Promise<void> {
         }
       }
 
-      if (!resp || !resp.ok) {
-        throw new Error(`All bypass engines failed (${resp?.status || 'no response'})`)
+      if (!resp) {
+        throw new Error(`All bypass engines failed (no response)`)
       }
 
       const mime = getMime(realUrl) || resp.headers.get('content-type') || 'text/html'
 
-      // If a binary resource slips through to ghost:// (like an image), stream it back directly
+      // If a binary resource slips through to ghost:// (like a video chunk or image), stream it back
       if (!mime.includes('text/html')) {
         const headers: Record<string, string> = {
           'Content-Type': mime,
           'Access-Control-Allow-Origin': '*'
         }
+        
+        // CRITICAL for video players: pass Range headers back
+        if (resp.headers.has('content-length')) headers['Content-Length'] = resp.headers.get('content-length')!
+        if (resp.headers.has('content-range')) headers['Content-Range'] = resp.headers.get('content-range')!
+        if (resp.headers.has('accept-ranges')) headers['Accept-Ranges'] = resp.headers.get('accept-ranges')!
 
         // Return a new response from the buffered data to avoid Stream truncation issues
         // and because undici already decompresses the body automatically.
@@ -453,24 +471,93 @@ export async function initializeGhostProtocol(): Promise<void> {
       })
     } catch (err) {
       console.error('[GhostProtocol] Error:', err)
-      throw err
+      const errMsg = String(err)
+      
+      // Distinguish DNS failures from bypass failures
+      let title = 'GhostStack — relay error'
+      let detail = String(err)
+      
+      if (errMsg.includes('domain may not exist') || errMsg.includes('ENOTFOUND') || errMsg.includes('DNS resolution failed')) {
+        title = 'GhostStack — domain not found'
+        detail = `The domain could not be resolved via any DNS server (including encrypted DoH). This domain may not exist or may be completely unreachable.`
+      } else if (errMsg.includes('All bypass engines failed')) {
+        title = 'GhostStack — bypass failed'
+        detail = `GhostStack tried all available bypass methods but the site returned an error. The site may be down or blocking all connections.`
+      }
+      
+      // Return a proper error Response — throwing from a protocol handler causes ERR_UNEXPECTED
+      // and triggers an infinite retry loop in TabManager's did-fail-load handler.
+      return new Response(
+        `<html><body style="font-family:sans-serif;padding:2rem"><h2>${title}</h2><pre>${detail}</pre></body></html>`,
+        { status: 502, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+      )
     }
   })
+}
+
+/**
+ * Builds the GhostStack injector script embedded into every ghost:// page.
+ *
+ * It runs at the very top of <head>, before any player scripts, and does two things:
+ *
+ * 1. Location protocol spoof — patches Location.prototype so player code that checks
+ *    location.protocol / .href / .origin sees 'https:' instead of 'ghost:'.
+ *
+ * 2. fetch + XHR relay intercept — rewrites ALL JavaScript-initiated HTTPS requests to
+ *    go through the local relay (http://127.0.0.1:PORT/r?u=...). This is belt-and-suspenders
+ *    alongside onBeforeRequest: it covers race conditions (requests fired before did-navigate
+ *    commits the ghost:// URL), sub-frame scripts, and any edge cases the Electron-level
+ *    interceptor can miss.
+ */
+function buildGhostInjector(port: number): string {
+  return `<script id="gs-injector">(function(){
+var R='http://127.0.0.1:${port}/r?u=';
+function needsRelay(u){return typeof u==='string'&&u.startsWith('https://')&&!u.includes('127.0.0.1');}
+try{
+  var L=Location.prototype;
+  function pg(p,fn){var d=Object.getOwnPropertyDescriptor(L,p);if(d&&d.get)Object.defineProperty(L,p,{get:function(){return fn(d.get.call(this));},configurable:true,enumerable:true});}
+  pg('protocol',function(v){return v==='ghost:'?'https:':v;});
+  pg('href',function(v){return v.startsWith('ghost://')?'https://'+v.slice(8):v;});
+  pg('origin',function(v){return v.startsWith('ghost://')?'https://'+v.slice(8):v;});
+}catch(e){}
+try{
+  var _f=window.fetch;
+  window.fetch=function(i,o){
+    if(typeof i==='string'&&needsRelay(i)){i=R+encodeURIComponent(i);}
+    else if(i instanceof Request&&needsRelay(i.url)){i=new Request(R+encodeURIComponent(i.url),i);}
+    return _f.call(this,i,o);
+  };
+  var _x=XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open=function(){
+    if(needsRelay(arguments[1]))arguments[1]=R+encodeURIComponent(arguments[1]);
+    return _x.apply(this,arguments);
+  };
+}catch(e){}
+})();</script>`
 }
 
 function rewriteHtml(html: string): string {
   // Strip integrity attributes so rewritten scripts don't fail SRI checks
   html = html.replace(/\s+integrity=["'][^"']*["']/gi, '')
 
-  // Strip CSP meta tags that could block our local relay or inline scripts
-  html = html.replace(/<meta[^>]*http-equiv=["']?Content-Security-Policy["']?[^>]*>/gi, '')
+  // Strip CSP and Trusted Types meta tags that could block our local relay or inline scripts
+  html = html.replace(/<meta[^>]*http-equiv=["']?(?:Content-Security-Policy|Require-Trusted-Types-For|origin-trial)["']?[^>]*>/gi, '')
+  // Catch alternate attributes ordering (content before http-equiv)
+  html = html.replace(/<meta[^>]*content=["'][^"']*["'][^>]*http-equiv=["']?(?:Content-Security-Policy|Require-Trusted-Types-For|origin-trial)["']?[^>]*>/gi, '')
 
   // ── Convert protocol-relative to absolute ──
   const urlAttrs = '(?:src|href|poster|srcset|data-[a-zA-Z0-9-]+)'
   html = html.replace(new RegExp(`(${urlAttrs}=["'])\\/\\/([^"']*?)(["'])`, 'gi'), `$1https://$2$3`)
 
-  // Inject a test script at the end of the body or head to verify JS execution
-  html = html.replace('</head>', '<script>console.log("HELLO FROM GHOSTSTACK INJECTOR"); setTimeout(()=>console.log("DOM loaded?", document.body.innerHTML.substring(0,200)), 1000);</script></head>')
+  // Inject as early as possible so player scripts see https: and requests go through relay
+  const injector = buildGhostInjector(localRelayPort)
+  if (html.includes('<head>')) {
+    html = html.replace('<head>', '<head>' + injector)
+  } else if (/<head[\s>]/i.test(html)) {
+    html = html.replace(/<head(\s[^>]*)?>/, (m) => m + injector)
+  } else {
+    html = injector + html
+  }
 
   return html
 }

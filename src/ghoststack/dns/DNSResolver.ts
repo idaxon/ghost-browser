@@ -6,6 +6,7 @@
 import { queryDoH, consensusResolve, type DoHProvider } from './DoHClient'
 import { queryDoT, consensusDoT, type DoTProvider } from './DoTClient'
 import type { SessionCache } from '../core/SessionCache'
+import { Web3Resolver } from './Web3Resolver'
 
 export interface DNSSettings {
   primaryProvider: DoHProvider
@@ -60,6 +61,8 @@ export class DNSResolver {
     enableNegativeCache: true
   }
 
+  private web3Resolver = new Web3Resolver()
+
   /** Local TTL-aware DNS cache (separate from SessionCache which tracks bypass IPs) */
   private dnsCache: Map<string, DNSCacheEntry> = new Map()
   /** Negative cache — domains that don't exist */
@@ -97,6 +100,16 @@ export class DNSResolver {
     const startTime = Date.now()
 
     try {
+      // 0. Native Web3 Domain Resolution
+      if (domain.endsWith('.eth')) {
+        const web3Result = await this.web3Resolver.resolve(domain)
+        if (web3Result) {
+          // Do not cache Web3 results locally to ensure freshness
+          return web3Result // Returns ipfs://CID or IP
+        }
+        return null // If Web3 resolution fails, don't fallback to DoH
+      }
+
       // 1. Local TTL-aware cache
       const cached = this.getCached(domain)
       if (cached !== undefined) {

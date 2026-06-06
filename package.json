@@ -24,6 +24,7 @@
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "electron": "^39.8.10",
+    "ethers": "^6.16.0",
     "ws": "^8.21.0"
   },
   "devDependencies": {

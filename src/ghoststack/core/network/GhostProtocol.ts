@@ -2,6 +2,28 @@ import { protocol, session } from 'electron'
 import * as http from 'http'
 import { Readable } from 'stream'
 import { GhostEngine } from './GhostEngine'
+import { Web3Resolver } from '../../dns/Web3Resolver'
+
+const web3Resolver = new Web3Resolver()
+
+async function getWeb3GatewayUrl(originalUrl: string): Promise<string> {
+  try {
+    const parsed = new URL(originalUrl)
+    if (parsed.hostname.endsWith('.eth')) {
+      const result = await web3Resolver.resolve(parsed.hostname)
+      if (result) {
+        if (result.startsWith('ipfs://')) {
+          const cid = result.replace('ipfs://', '')
+          return `https://dweb.link/ipfs/${cid}${parsed.pathname}${parsed.search}`
+        } else if (result.startsWith('ipns://')) {
+          const cid = result.replace('ipns://', '')
+          return `https://dweb.link/ipns/${cid}${parsed.pathname}${parsed.search}`
+        }
+      }
+    }
+  } catch {}
+  return originalUrl
+}
 
 
 /**
@@ -209,7 +231,8 @@ function startLocalRelay(): Promise<number> {
         let response: Response | null = null
 
         try {
-          response = await GhostEngine.fetch(targetUrl, fetchOptions)
+          const finalUrl = await getWeb3GatewayUrl(targetUrl)
+          response = await GhostEngine.fetch(finalUrl, fetchOptions)
           if (response.ok) {
             console.log(`[GhostProtocol] ✅ Relay ${response.status}: ${targetUrl.substring(0, 80)}`)
           }
@@ -389,7 +412,8 @@ export async function initializeGhostProtocol(): Promise<void> {
       let resp: Response | null = null
 
       try {
-        resp = await GhostEngine.fetch(realUrl, fetchOptions)
+        const finalUrl = await getWeb3GatewayUrl(realUrl)
+        resp = await GhostEngine.fetch(finalUrl, fetchOptions)
       } catch (engineErr) {
         console.warn(`[GhostProtocol] GhostEngine failed for ${realUrl}:`, engineErr)
       }
@@ -423,7 +447,8 @@ export async function initializeGhostProtocol(): Promise<void> {
       }
 
       let html = await resp.text()
-      html = rewriteHtml(html)
+      const isWeb3 = realUrl.includes('.eth') || realUrl.includes('.crypto')
+      html = rewriteHtml(html, isWeb3)
 
       console.log(`[GhostProtocol] ✅ Rendered ${hostname} (${(html.length / 1024).toFixed(0)}KB)`)
 
@@ -519,7 +544,7 @@ try{
 })();</script>`
 }
 
-function rewriteHtml(html: string): string {
+function rewriteHtml(html: string, isWeb3: boolean = false): string {
   // Strip integrity attributes so rewritten scripts don't fail SRI checks
   html = html.replace(/\s+integrity=["'][^"']*["']/gi, '')
 
@@ -533,7 +558,14 @@ function rewriteHtml(html: string): string {
   html = html.replace(new RegExp(`(${urlAttrs}=["'])\\/\\/([^"']*?)(["'])`, 'gi'), `$1https://$2$3`)
 
   // Inject as early as possible so player scripts see https: and requests go through relay
-  const injector = buildGhostInjector(localRelayPort)
+  let injector = buildGhostInjector(localRelayPort)
+  
+  if (isWeb3) {
+    // Inject a strict Content-Security-Policy to sandbox Web3 domains and block unauthorized cross-site tracking/execution
+    const web3Csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'self' http://127.0.0.1:* blob: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:*; style-src 'self' 'unsafe-inline' http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:* wss://* https://*; img-src * data: blob:; media-src * data: blob:;">`
+    injector = web3Csp + injector
+  }
+
   if (html.includes('<head>')) {
     html = html.replace('<head>', '<head>' + injector)
   } else if (/<head[\s>]/i.test(html)) {

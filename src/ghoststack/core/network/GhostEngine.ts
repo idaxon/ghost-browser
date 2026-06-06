@@ -1,5 +1,4 @@
 import { GhostHandshake } from './GhostHandshake'
-import { WorkerTunnel } from './WorkerTunnel'
 
 
 /**

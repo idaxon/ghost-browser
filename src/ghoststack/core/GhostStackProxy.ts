@@ -12,7 +12,6 @@
 import * as http from 'http'
 import * as net from 'net'
 import type { SessionCache } from './SessionCache'
-import { WorkerTunnel } from './network/WorkerTunnel'
 
 /** Proxy status */
 export interface ProxyStatus {

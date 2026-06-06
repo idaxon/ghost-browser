@@ -96,6 +96,17 @@ export class TabManager {
         managedTab.intendedUrl = url
       }
       
+      // Upgrade Web3 Domains to GhostProtocol
+      try {
+        const parsedUrl = new URL(url)
+        if (parsedUrl.hostname.endsWith('.eth') && parsedUrl.protocol !== 'ghost:') {
+          event.preventDefault()
+          const ghostUrl = url.replace(/^https?:\/\//, 'ghost://')
+          view.webContents.loadURL(ghostUrl)
+          return
+        }
+      } catch {}
+
       // If the main frame tries to navigate to our local relay, intercept it
       if (url.includes('127.0.0.1')) {
         try {
@@ -512,7 +523,13 @@ export class TabManager {
   private normalizeUrl(url: string): string {
     if (url === 'flux://newtab' || url === 'about:blank') return url
     if (/^(https?|ghost|data|blob):/i.test(url)) return url
-    if (/^[^\s]+\.[^\s]+$/.test(url) && !url.includes(' ')) return `https://${url}`
+    if (/^[^\s]+\.[^\s]+$/.test(url) && !url.includes(' ')) {
+      // Automatically use GhostProtocol for Web3 domains
+      if (url.endsWith('.eth') || url.includes('.eth/')) {
+        return `ghost://${url}`
+      }
+      return `https://${url}`
+    }
     return `https://www.google.com/search?q=${encodeURIComponent(url)}`
   }
 

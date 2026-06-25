@@ -124,6 +124,9 @@ export interface BrowserState {
   settingsOpen: boolean
   settingsTab: SettingsTab
   darkRoomOpen: boolean
+  darkRoomSplit: boolean
+  darkRoomWidth: number
+  ghostIdOpen: boolean
   ghoststackStatus: GhostStackStatus | null
   uiSettings: UISettings
   performanceMetrics: PerformanceMetrics
@@ -154,6 +157,9 @@ export type BrowserAction =
   | { type: 'TOGGLE_SETTINGS' }
   | { type: 'SET_SETTINGS_TAB'; payload: SettingsTab }
   | { type: 'TOGGLE_DARK_ROOM' }
+  | { type: 'TOGGLE_DARK_ROOM_SPLIT' }
+  | { type: 'SET_DARK_ROOM_WIDTH'; payload: number }
+  | { type: 'TOGGLE_GHOST_ID' }
   | { type: 'SET_GHOSTSTACK_STATUS'; payload: GhostStackStatus }
   | { type: 'SET_UI_SETTINGS'; payload: Partial<UISettings> }
   | { type: 'SET_PERFORMANCE_METRICS'; payload: Partial<PerformanceMetrics> }
@@ -174,6 +180,7 @@ export interface GhostAPI {
   unmuteTab: (id: string) => void
   toggleSplitView: (mode: SplitViewMode, primaryId: string, secondaryId: string | null) => void
   updateSidebarWidth: (width: number) => void
+  updateRightOffset?: (width: number) => void
   setOverlayActive?: (active: boolean) => void
   onTabCreated: (callback: (tab: Tab) => void) => void
   onTabUpdated: (callback: (id: string, updates: Partial<Tab>) => void) => void
@@ -214,7 +221,22 @@ export interface GhostAPI {
   darkroomSetOnionAddr: (addr: string) => Promise<boolean>
   darkroomStart: () => Promise<{ ok: boolean; port?: number; error?: string }>
   darkroomStop: () => Promise<boolean>
-  onDarkroomTorStatus: (cb: (data: { status: string; progress: number | null }) => void) => void
+  onDarkroomTorStatus: (
+    cb: (data: { status: string; progress: number | null }) => void
+  ) => () => void
+
+  // DC Net
+  dcnetJoin: (roomId: string, peerId: string) => Promise<any>
+  dcnetLeave: (roomId: string, peerId: string) => Promise<any>
+  dcnetSubmitVector: (
+    roomId: string,
+    round: number,
+    phase: 'reservation' | 'message',
+    peerId: string,
+    vector: number[]
+  ) => Promise<any>
+  onDcnetRoundResult: (cb: (data: any) => void) => () => void
+
   showKebabMenu: (currentTheme: string) => void
   onMenuAction: (callback: (action: string) => void) => void
   onThemeChange: (callback: (theme: 'light' | 'dark' | 'system') => void) => void

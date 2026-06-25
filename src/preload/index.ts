@@ -20,6 +20,7 @@ const api = {
 
   // Sidebar
   updateSidebarWidth: (width: number): void => ipcRenderer.send('sidebar:width', width),
+  updateRightOffset: (width: number): void => ipcRenderer.send('window:right-offset', width),
 
   // Overlay
   setOverlayActive: (active: boolean): void => ipcRenderer.send('overlay:active', active),
@@ -103,9 +104,33 @@ const api = {
   darkroomGetConfig: (): Promise<any> => ipcRenderer.invoke('darkroom:get-config'),
   darkroomStart: (): Promise<any> => ipcRenderer.invoke('darkroom:start'),
   darkroomStop: (): Promise<boolean> => ipcRenderer.invoke('darkroom:stop'),
-  onDarkroomTorStatus: (cb: (_data: any) => void): void => {
-    ipcRenderer.removeAllListeners('darkroom:tor-status')
-    ipcRenderer.on('darkroom:tor-status', (_e, data) => cb(data))
+  onDarkroomTorStatus: (cb: (data: any) => void): (() => void) => {
+    const listener = (_e: any, data: any) => cb(data)
+    ipcRenderer.on('darkroom:tor-status', listener)
+    return () => {
+      ipcRenderer.removeListener('darkroom:tor-status', listener)
+    }
+  },
+
+  // ── DC Net ──
+  dcnetJoin: (roomId: string, peerId: string): Promise<any> =>
+    ipcRenderer.invoke('dcnet:join', roomId, peerId),
+  dcnetLeave: (roomId: string, peerId: string): Promise<any> =>
+    ipcRenderer.invoke('dcnet:leave', roomId, peerId),
+  dcnetSubmitVector: (
+    roomId: string,
+    round: number,
+    phase: 'reservation' | 'message',
+    peerId: string,
+    vector: number[]
+  ): Promise<any> =>
+    ipcRenderer.invoke('dcnet:submit-vector', roomId, round, phase, peerId, vector),
+  onDcnetRoundResult: (cb: (data: any) => void): (() => void) => {
+    const listener = (_e: any, data: any) => cb(data)
+    ipcRenderer.on('dcnet:round-result', listener)
+    return () => {
+      ipcRenderer.removeListener('dcnet:round-result', listener)
+    }
   },
 
   // ── Context Menus ──

@@ -71,6 +71,9 @@ const initialState: BrowserState = {
   settingsOpen: false,
   settingsTab: 'ghoststack',
   darkRoomOpen: false,
+  darkRoomSplit: false,
+  darkRoomWidth: 450,
+  ghostIdOpen: false,
   ghoststackStatus: null,
   uiSettings: {
     theme: getInitialTheme(),
@@ -186,6 +189,12 @@ function browserReducer(state: BrowserState, action: BrowserAction): BrowserStat
       return { ...state, settingsTab: action.payload }
     case 'TOGGLE_DARK_ROOM':
       return { ...state, darkRoomOpen: !state.darkRoomOpen }
+    case 'TOGGLE_DARK_ROOM_SPLIT':
+      return { ...state, darkRoomSplit: !state.darkRoomSplit }
+    case 'SET_DARK_ROOM_WIDTH':
+      return { ...state, darkRoomWidth: action.payload }
+    case 'TOGGLE_GHOST_ID':
+      return { ...state, ghostIdOpen: !state.ghostIdOpen }
     case 'SET_GHOSTSTACK_STATUS':
       return { ...state, ghoststackStatus: action.payload }
     case 'SET_UI_SETTINGS': {

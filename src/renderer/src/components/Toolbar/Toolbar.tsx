@@ -1,10 +1,11 @@
+import React from 'react'
 import { useBrowser } from '../../context/BrowserContext'
 import AddressBar from './AddressBar'
 import NavButton from './NavButton'
 import KebabMenu from './KebabMenu'
 
-export default function Toolbar() {
-  const { state, goBack, goForward, reload } = useBrowser()
+export default function Toolbar(): React.ReactNode {
+  const { state, dispatch, goBack, goForward, reload } = useBrowser()
   const activeTab = state.tabs.find((t) => t.id === state.activeTabId)
 
   return (
@@ -15,6 +16,26 @@ export default function Toolbar() {
         borderBottom: '1px solid var(--color-border-subtle)'
       }}
     >
+      {/* Sidebar toggle button */}
+      <button
+        onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
+        title="Toggle Sidebar (Ctrl+B)"
+        className="nav-btn"
+        style={{
+          color: state.sidebarCollapsed ? 'var(--color-text-secondary)' : 'var(--color-accent)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          flexShrink: 0
+        }}
+      >
+        <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+          <path d="M1.5 2.5h12v10h-12z" stroke="currentColor" strokeWidth="1.2" />
+          <path d="M4.5 2.5v10" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+      </button>
+
       {/* Navigation pill (back, forward, reload grouped) */}
       <div className="nav-pill">
         <NavButton onClick={goBack} disabled={!activeTab?.canGoBack} title="Back (Alt+←)">
@@ -89,6 +110,37 @@ export default function Toolbar() {
 
       {/* Right actions */}
       <div className="flex items-center gap-2">
+        {/* Dark Room Button */}
+        <button
+          onClick={() => dispatch({ type: 'TOGGLE_DARK_ROOM' })}
+          title="Open Dark Room (Cmd+D)"
+          className="nav-btn"
+          style={{
+            color: state.darkRoomOpen ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            flexShrink: 0
+          }}
+        >
+          <svg width="15" height="15" viewBox="0 0 14 14" fill="none">
+            <path
+              d="M7 1.5L12 4.25v5.5L7 12.5 2 9.75v-5.5L7 1.5Z"
+              stroke="currentColor"
+              strokeWidth="1.1"
+              strokeLinejoin="round"
+            />
+            <circle cx="7" cy="6.5" r="1.5" fill="currentColor" opacity="0.7" />
+            <path
+              d="M4.5 10c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5"
+              stroke="currentColor"
+              strokeWidth="1.1"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+
         {/* Bookmark star */}
         <NavButton onClick={() => {}} title="Bookmark this page">
           <svg width="15" height="15" viewBox="0 0 15 15" fill="none">

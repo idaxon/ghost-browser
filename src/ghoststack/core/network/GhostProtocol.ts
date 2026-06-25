@@ -3,6 +3,8 @@ import * as http from 'http'
 import { Readable } from 'stream'
 import { GhostEngine } from './GhostEngine'
 import { Web3Resolver } from '../../dns/Web3Resolver'
+import { join } from 'path'
+import * as fs from 'fs'
 
 const web3Resolver = new Web3Resolver()
 
@@ -400,6 +402,73 @@ export async function initializeGhostProtocol(): Promise<void> {
 
       const targetUrl = new URL(rawUrl.replace('ghost://', 'https://'))
       const hostname = targetUrl.hostname
+
+      // ── Handle local ghost:// darkroom/ghostid/dcnet pages ────────────────────
+      if (['darkroom', 'ghostid', 'dcnet'].includes(hostname)) {
+        const isDev = !!process.env['ELECTRON_RENDERER_URL']
+        const hasExtension = /\.[a-zA-Z0-9]+$/.test(targetUrl.pathname)
+
+        if (!hasExtension) {
+          // Serve React app entry point (index.html)
+          let html = ''
+          if (isDev) {
+            const devUrl = process.env['ELECTRON_RENDERER_URL'] || 'http://localhost:5173'
+            const res = await fetch(devUrl)
+            html = await res.text()
+          } else {
+            const indexPat = join(__dirname, '../renderer/index.html')
+            html = fs.readFileSync(indexPat, 'utf-8')
+          }
+
+          // Inject tabRoute query parameter for React App to read
+          const injector = `<script>
+            // Spoof search params for local router
+            const url = new URL(window.location.href);
+            url.searchParams.set('tabRoute', '${hostname}');
+            window.history.replaceState(null, '', url.pathname + url.search);
+          </script>`
+
+          if (html.includes('<head>')) {
+            html = html.replace('<head>', '<head>' + injector)
+          } else {
+            html = injector + html
+          }
+
+          return new Response(html, {
+            status: 200,
+            headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+              'Access-Control-Allow-Origin': '*'
+            }
+          })
+        } else {
+          // Serve Vite/production assets
+          if (isDev) {
+            const devUrl = process.env['ELECTRON_RENDERER_URL'] || 'http://localhost:5173'
+            const res = await fetch(devUrl + targetUrl.pathname + targetUrl.search)
+            const mime = res.headers.get('content-type') || 'application/javascript'
+            const buf = await res.arrayBuffer()
+            return new Response(buf, {
+              status: res.status,
+              headers: { 'Content-Type': mime, 'Access-Control-Allow-Origin': '*' }
+            })
+          } else {
+            const assetPath = join(__dirname, '../renderer', targetUrl.pathname)
+            try {
+              const buf = fs.readFileSync(assetPath)
+              const ext = targetUrl.pathname.split('.').pop()?.toLowerCase() || ''
+              const mime = MIME[ext] || 'application/octet-stream'
+              return new Response(buf, {
+                status: 200,
+                headers: { 'Content-Type': mime, 'Access-Control-Allow-Origin': '*' }
+              })
+            } catch {
+              return new Response('Not Found', { status: 404 })
+            }
+          }
+        }
+      }
+
       const fullPath = targetUrl.pathname + targetUrl.search
       const realUrl = targetUrl.href
 

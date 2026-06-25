@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap');
 @import 'tailwindcss';
 
 /* ─── Design Tokens ─── */
@@ -1285,4 +1286,43 @@ button:focus-visible {
 .shortcut-modal-btn.confirm:hover {
   background: #ff1a1a;
   box-shadow: 0 4px 12px rgba(230, 57, 70, 0.3);
+}
+
+/* ─── Dark Room Custom Theme ─── */
+.darkroom-container {
+  --dr-bg-primary: #f9f9f9;
+  --dr-bg-secondary: #ffffff;
+  --dr-border-subtle: #e5e5e5;
+  --dr-text-primary: #111111;
+  --dr-text-secondary: #666666;
+  --dr-color-accent: #c0392b;
+  --dr-color-accent-subtle: rgba(192, 57, 43, 0.08);
+  --dr-color-accent-muted: rgba(192, 57, 43, 0.2);
+  --dr-font-heading: 'Space Grotesk', sans-serif;
+  --dr-font-mono: 'Space Mono', monospace;
+}
+
+.dark .darkroom-container {
+  --dr-bg-primary: #050505;
+  --dr-bg-secondary: #0d0d0d;
+  --dr-border-subtle: #1a1a1a;
+  --dr-text-primary: #f0f0f0;
+  --dr-text-secondary: #888888;
+  --dr-color-accent: #c0392b;
+  --dr-color-accent-subtle: rgba(192, 57, 43, 0.08);
+  --dr-color-accent-muted: rgba(192, 57, 43, 0.2);
+}
+
+.darkroom-container h1,
+.darkroom-container h2,
+.darkroom-container h3,
+.darkroom-container h4,
+.darkroom-container .font-heading {
+  font-family: var(--dr-font-heading) !important;
+}
+
+.darkroom-container .font-mono,
+.darkroom-container code,
+.darkroom-container pre {
+  font-family: var(--dr-font-mono) !important;
 }

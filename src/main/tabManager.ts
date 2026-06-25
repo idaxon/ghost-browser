@@ -25,6 +25,7 @@ export class TabManager {
   private splitMode: 'none' | 'horizontal' | 'vertical' = 'none'
   private splitSecondaryId: string | null = null
   private isOverlayActive: boolean = false
+  private rightOffset: number = 0
 
   constructor(
     private window: BaseWindow,
@@ -350,6 +351,15 @@ export class TabManager {
         enabled: params.editFlags.canCopy
       })
 
+      template.push({ type: 'separator' })
+      template.push({
+        label: 'Open Dark Room for this page',
+        enabled: false,
+        click: () => {
+          console.log('[DarkRoom] "Open Dark Room for this page" clicked. URL:', params.pageURL)
+        }
+      })
+
       const contextMenu = Menu.buildFromTemplate(template)
       contextMenu.popup({ window: this.window })
     })
@@ -547,6 +557,11 @@ export class TabManager {
     }
   }
 
+  setRightOffset(width: number): void {
+    this.rightOffset = width
+    this.positionTabs()
+  }
+
   positionTabs(): void {
     const sidebarWidth = this.windowManager.getSidebarWidth()
     const toolbarHeight = 88 // TopTabBar (40px) + Toolbar (48px)
@@ -554,7 +569,7 @@ export class TabManager {
 
     const contentX = sidebarWidth
     const contentY = toolbarHeight
-    const contentWidth = bounds.width - sidebarWidth
+    const contentWidth = bounds.width - sidebarWidth - this.rightOffset
     const contentHeight = bounds.height - toolbarHeight
 
     if (this.isOverlayActive) {

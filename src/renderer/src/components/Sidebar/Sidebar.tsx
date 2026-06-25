@@ -46,7 +46,8 @@ export default function Sidebar() {
     recentlyClosed,
     tabSearchQuery,
     tabSearchOpen,
-    darkRoomOpen
+    darkRoomOpen,
+    ghostIdOpen
   } = state
   const searchRef = useRef<HTMLInputElement>(null)
   const [, setDragIdx] = useState<number | null>(null)
@@ -642,6 +643,53 @@ export default function Sidebar() {
             Dark Room
           </span>
           {darkRoomOpen && (
+            <span
+              className="ml-auto"
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: 'var(--color-accent)',
+                display: 'inline-block'
+              }}
+            />
+          )}
+        </button>
+        <button
+          onClick={() => dispatch({ type: 'TOGGLE_GHOST_ID' })}
+          className="no-drag sidebar-tab flex items-center gap-2.5 w-full px-2.5 py-[7px] rounded-[9px] cursor-pointer"
+          style={
+            ghostIdOpen
+              ? { background: 'var(--color-accent-subtle)', color: 'var(--color-accent)' }
+              : {}
+          }
+          title="Ghost ID — Local Cryptographic Identity"
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 14 14"
+            fill="none"
+            style={{ opacity: ghostIdOpen ? 1 : 0.6 }}
+          >
+            <circle cx="7" cy="5" r="2.5" stroke="currentColor" strokeWidth="1.1" />
+            <path
+              d="M3 12c0-2.2 1.8-4 4-4s4 1.8 4 4"
+              stroke="currentColor"
+              strokeWidth="1.1"
+              strokeLinecap="round"
+            />
+          </svg>
+          <span
+            style={{
+              fontSize: 12,
+              color: ghostIdOpen ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+              fontWeight: 400
+            }}
+          >
+            Ghost ID
+          </span>
+          {ghostIdOpen && (
             <span
               className="ml-auto"
               style={{

@@ -9,6 +9,7 @@ import { GhostStackOrchestrator } from '../ghoststack/core/GhostStackOrchestrato
 import { initLogger, closeLogger, getLogFilePath } from '../ghoststack/core/Logger'
 import { torService } from './services/TorService'
 import { darkRoomProxy, resolveOnionAddr } from './services/DarkRoomProxy'
+import './services/DCNetService'
 
 // ─── GhostStack Chromium Flags ───
 // Encrypt DNS queries
@@ -254,6 +255,14 @@ function registerIpcHandlers(): void {
     }
   })
 
+  // Right offset (Split screen Dark Room)
+  ipcMain.on('window:right-offset', (event, width: number) => {
+    const inst = findInstanceByWebContents(event.sender)
+    if (inst) {
+      inst.tabManager.setRightOffset(width)
+    }
+  })
+
   ipcMain.on('overlay:active', (event, active: boolean) => {
     const inst = findInstanceByWebContents(event.sender)
     inst?.tabManager.setOverlayActive(active)
@@ -281,6 +290,13 @@ function registerIpcHandlers(): void {
         label: 'Add Shortcut',
         click: () => {
           inst.uiView.webContents.send('menu:action', 'add-shortcut')
+        }
+      },
+      {
+        label: 'Dark Room',
+        accelerator: 'CmdOrCtrl+D',
+        click: () => {
+          inst.uiView.webContents.send('menu:action', 'darkroom')
         }
       },
       { type: 'separator' },

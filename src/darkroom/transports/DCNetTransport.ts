@@ -41,6 +41,7 @@ export class DCNetTransport implements Transport {
   private myPeerId: string | null = null
   private mySecretKeyB64: string
   private peerPubKeys: Record<string, string> = {} // peerId -> publicKeyB64
+  private activePeers: Set<string> = new Set()
 
   private messageListeners: Array<(payload: EncryptedPayload) => void> = []
   private statusListeners: Array<(status: TransportStatus, err?: string | null) => void> = []
@@ -68,6 +69,8 @@ export class DCNetTransport implements Transport {
   private connectTimeoutId: ReturnType<typeof setTimeout> | null = null
   private reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null
   private heartbeatIntervalId: ReturnType<typeof setTimeout> | null = null
+  private pongTimeoutId: ReturnType<typeof setTimeout> | null = null
+  private currentBackoff = 3000
 
   constructor(mySecretKeyB64: string, peerPubKeys: Record<string, string>) {
     this.mySecretKeyB64 = mySecretKeyB64
@@ -87,6 +90,7 @@ export class DCNetTransport implements Transport {
     this.round = 0
     this.myReservedSlot = null
     this.pendingMessage = null
+    this.currentBackoff = 3000
     this.updateStatus('connecting')
     this.log('Connecting')
 
@@ -97,6 +101,8 @@ export class DCNetTransport implements Transport {
     return new Promise((resolve, reject) => {
       this.connectResolver = resolve
       this.connectRejecter = reject
+
+      const isReconnectingJoin = this.status === 'reconnecting' || this.status === 'heartbeat-lost'
 
       this.clearAllTimers()
 
@@ -120,7 +126,7 @@ export class DCNetTransport implements Transport {
         this.connectTimeoutId = setTimeout(() => {
           this.log('Connection timeout')
           this.handleConnectionFailure(new Error('Coordinator unavailable.'))
-        }, 10000)
+        }, DARKROOM_CONFIG.ROUND_TIMEOUT)
 
         this.ws.onopen = () => {
           this.log('Connected')
@@ -129,7 +135,8 @@ export class DCNetTransport implements Transport {
               JSON.stringify({
                 type: 'join',
                 roomId: this.roomId,
-                peerId: this.myPeerId
+                peerId: this.myPeerId,
+                reconnect: isReconnectingJoin
               })
             )
           }
@@ -141,6 +148,12 @@ export class DCNetTransport implements Transport {
             if (data.type === 'joined') {
               this.log('Joined')
               this.updateStatus('connected')
+
+              if (data.activePeers && Array.isArray(data.activePeers)) {
+                this.activePeers = new Set(data.activePeers)
+              } else {
+                this.activePeers = new Set([this.myPeerId!])
+              }
 
               if (this.connectTimeoutId) {
                 clearTimeout(this.connectTimeoutId)
@@ -160,6 +173,34 @@ export class DCNetTransport implements Transport {
               if (data.roomId === this.roomId) {
                 this.roundResultListeners.forEach((l) => l(data))
                 this.handleRoundResult(data.round, data.phase, data.result)
+              }
+            } else if (data.type === 'peer-joined') {
+              this.log(`Peer Joined: ${data.peerId}`)
+              this.activePeers.add(data.peerId)
+              this.myReservedSlot = null
+              this.round++
+              this.runReservationRound()
+            } else if (data.type === 'peer-left') {
+              this.log(`Peer Left: ${data.peerId}`)
+              this.activePeers.delete(data.peerId)
+              this.myReservedSlot = null
+              this.round++
+              this.runReservationRound()
+            } else if (data.type === 'round-timeout') {
+              this.log('Round Timeout')
+              this.myReservedSlot = null
+              this.round = (data.round || this.round) + 1
+              this.runReservationRound()
+            } else if (data.type === 'pong') {
+              if (this.pongTimeoutId) {
+                clearTimeout(this.pongTimeoutId)
+                this.pongTimeoutId = null
+              }
+            } else if (data.type === 'error') {
+              this.log(`Error: ${data.message}`)
+              this.updateStatus('error', data.message)
+              if (this.ws) {
+                this.ws.close()
               }
             }
           } catch (e) {
@@ -222,11 +263,13 @@ export class DCNetTransport implements Transport {
       this.establishConnection()
         .then(() => {
           this.log('Connected')
+          this.currentBackoff = 3000
         })
         .catch((err) => {
           this.log('Reconnect attempt failed:', err.message)
         })
-    }, 3000)
+      this.currentBackoff = Math.min(this.currentBackoff * 2, 30000)
+    }, this.currentBackoff)
   }
 
   private startHeartbeat(): void {
@@ -237,8 +280,23 @@ export class DCNetTransport implements Transport {
     this.heartbeatIntervalId = setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.send(JSON.stringify({ type: 'ping' }))
+
+        if (this.pongTimeoutId) {
+          clearTimeout(this.pongTimeoutId)
+        }
+        this.pongTimeoutId = setTimeout(() => {
+          this.log('Heartbeat Lost')
+          this.updateStatus('heartbeat-lost', 'Heartbeat lost.')
+          if (this.ws) {
+            try {
+              this.ws.close()
+            } catch {
+              // Ignore close errors on heartbeat timeout
+            }
+          }
+        }, 10000)
       }
-    }, 30000)
+    }, DARKROOM_CONFIG.HEARTBEAT_INTERVAL)
   }
 
   private clearAllTimers(): void {
@@ -253,6 +311,10 @@ export class DCNetTransport implements Transport {
     if (this.heartbeatIntervalId) {
       clearInterval(this.heartbeatIntervalId)
       this.heartbeatIntervalId = null
+    }
+    if (this.pongTimeoutId) {
+      clearTimeout(this.pongTimeoutId)
+      this.pongTimeoutId = null
     }
   }
 
@@ -284,13 +346,13 @@ export class DCNetTransport implements Transport {
     this.messageListeners = []
     this.statusListeners = []
     this.roundResultListeners = []
+    this.activePeers.clear()
   }
 
   public async send(payload: EncryptedPayload): Promise<void> {
     if (this.status !== 'connected') {
       throw new Error('DC-Net transport not connected')
     }
-    // Queue message for broadcast
     this.pendingMessage = payload
     this.log('Message queued, waiting for slot reservation')
   }
@@ -302,36 +364,31 @@ export class DCNetTransport implements Transport {
 
     const vector = new Array(21).fill(0)
 
-    // If we have a pending message and haven't successfully reserved a slot yet, pick one
     if (this.pendingMessage && this.myReservedSlot === null) {
       this.myReservedSlot = Math.floor(Math.random() * 20)
-      this.myReservationToken = Math.floor(Math.random() * 0x7fffffff) + 1 // non-zero 31-bit token
+      this.myReservationToken = Math.floor(Math.random() * 0x7fffffff) + 1
       vector[this.myReservedSlot] = this.myReservationToken
-      // Mark slot 20 with a non-zero token to indicate we are trying to reserve
       vector[20] = Math.floor(Math.random() * 0x7fffffff) + 1
     } else if (this.myReservedSlot !== null && this.pendingMessage) {
-      // If we already successfully reserved a slot, keep writing it to keep it reserved
       vector[this.myReservedSlot] = this.myReservationToken
-      vector[20] = 0 // we succeeded, so we don't block transition to message phase
+      vector[20] = 0
     } else {
-      // Nothing to send
       vector[20] = 0
     }
 
-    // Blind the vector using pairwise Curve25519 secrets
     const blinded = [...vector]
     for (const [peerId, peerPubKey] of Object.entries(this.peerPubKeys)) {
       if (peerId === this.myPeerId) continue
+      if (!this.activePeers.has(peerId)) continue
       const sharedSecret = deriveSharedSecret(this.mySecretKeyB64, peerPubKey)
 
       for (let s = 0; s < 21; s++) {
         const pad = hashPad(sharedSecret, this.round, s)
         blinded[s] ^= pad
-        blinded[s] = blinded[s] >>> 0 // unsigned 32-bit
+        blinded[s] = blinded[s] >>> 0
       }
     }
 
-    // Submit to coordinator
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(
         JSON.stringify({
@@ -361,17 +418,15 @@ export class DCNetTransport implements Transport {
           this.log(`Slot ${this.myReservedSlot} successfully reserved!`)
         } else {
           this.log(`Collision detected on slot ${this.myReservedSlot}. Retrying...`)
-          this.myReservedSlot = null // reset to retry
+          this.myReservedSlot = null
         }
       }
 
-      // Check slot 20 (ready status)
       const reservationStatus = result[20]
       if (reservationStatus === 0) {
         this.log('No active reservations pending. Transitioning to MESSAGE phase.')
         this.runMessageRound()
       } else {
-        // Run another reservation round
         this.round++
         this.runReservationRound()
       }
@@ -379,7 +434,6 @@ export class DCNetTransport implements Transport {
       this.log(`Message round ${round} finished.`)
       this.handleIncomingMessageVector(result)
 
-      // Reset for next messages
       this.pendingMessage = null
       this.myReservedSlot = null
       this.round++
@@ -392,38 +446,32 @@ export class DCNetTransport implements Transport {
 
     this.log('Message Round')
 
-    // Flat vector of size 21 slots * 128 elements = 2688 elements.
     const flatVector = new Array(21 * 128).fill(0)
 
     if (this.pendingMessage && this.myReservedSlot !== null) {
-      // Encode the JSON string of our message payload to UTF-8
       const payloadStr = JSON.stringify(this.pendingMessage)
       const payloadBytes = new TextEncoder().encode(payloadStr)
 
-      // Copy payload bytes to our reserved slot (each slot is 128 integers, starting at myReservedSlot * 128)
       const offset = this.myReservedSlot * 128
-      // Write the length of the payload in the first byte
       flatVector[offset] = payloadBytes.length
       for (let i = 0; i < payloadBytes.length && i < 500; i++) {
         const byteIdx = i
-        const intIdx = Math.floor(byteIdx / 4) + 1 // index 0 is length
+        const intIdx = Math.floor(byteIdx / 4) + 1
         const shift = (byteIdx % 4) * 8
         flatVector[offset + intIdx] |= payloadBytes[byteIdx] << shift
       }
     }
 
-    // Blind the flat vector
     const blinded = [...flatVector]
     for (const [peerId, peerPubKey] of Object.entries(this.peerPubKeys)) {
       if (peerId === this.myPeerId) continue
+      if (!this.activePeers.has(peerId)) continue
       const sharedSecret = deriveSharedSecret(this.mySecretKeyB64, peerPubKey)
 
-      // XOR each element with a pseudo-random 32-bit number
       for (let s = 0; s < 21; s++) {
         const offset = s * 128
         const blinder = generateBlinderBuffer(sharedSecret, this.round, s, 512)
 
-        // Pack blinder bytes into 32-bit integers and XOR
         for (let i = 0; i < 128; i++) {
           const b0 = blinder[i * 4]
           const b1 = blinder[i * 4 + 1]
@@ -436,7 +484,6 @@ export class DCNetTransport implements Transport {
       }
     }
 
-    // Submit to coordinator
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(
         JSON.stringify({
@@ -453,12 +500,10 @@ export class DCNetTransport implements Transport {
   }
 
   private handleIncomingMessageVector(result: number[]): void {
-    // There are 20 slots. Each slot is 128 integers.
     for (let s = 0; s < 20; s++) {
       const offset = s * 128
       const length = result[offset]
       if (length > 0 && length <= 500) {
-        // Unpack payload bytes
         const payloadBytes = new Uint8Array(length)
         for (let i = 0; i < length; i++) {
           const intIdx = Math.floor(i / 4) + 1

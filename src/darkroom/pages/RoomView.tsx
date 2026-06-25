@@ -283,7 +283,7 @@ export function RoomView({
                     'Reconnecting...'
                   ) : transportStatus === 'disconnected' ? (
                     'Disconnected'
-                  ) : transportStatus === 'error' ? (
+                  ) : transportStatus === 'error' || transportStatus === 'heartbeat-lost' ? (
                     'Coordinator Offline'
                   ) : (
                     transportStatus

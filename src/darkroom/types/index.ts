@@ -1,6 +1,6 @@
 export type TransportMode = 'standard' | 'tor' | 'dcnet'
 
-export type TransportStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error'
+export type TransportStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error' | 'heartbeat-lost'
 
 export interface EncryptedPayload {
   roomId: string
